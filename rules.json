@@ -1,0 +1,15 @@
+{
+    "version": 1,
+
+    "franquicia_postal_usd": 50,
+
+    "arancel_postal": 0.50,
+
+    "tasa_correo_ars": 12000,
+
+    "limite_courier_usd": 3000,
+
+    "iva_courier": 0.21,
+
+    "updated_rules": "2026-05-17"
+}

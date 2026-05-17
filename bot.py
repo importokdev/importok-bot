@@ -1,63 +1,239 @@
 import json
+import os
+import time
 import requests
-from bs4 import BeautifulSoup
+from datetime import datetime
 
-# URLs de donde el bot va a sacar la info de forma automática
-URL_DOLAR = "https://dolarapi.com/v1/dolares/tarjeta"
-# Usamos una URL de referencia de tasas o el endpoint del Correo
-URL_CORREO = "https://www.correoargentino.com.ar/servicios/internacionales" 
+# ==========================================
+# CONFIG
+# ==========================================
+
+OUTPUT_FILE = "live_data.json"
+TEMP_FILE = "live_data.tmp.json"
+BACKUP_FILE = "live_data.backup.json"
+
+FUENTES_DOLAR = [
+    "https://dolarapi.com/v1/dolares/tarjeta",
+    "https://api.bluelytics.com.ar/v2/latest"
+]
+
+HEADERS = {
+    "User-Agent": "ImportoK-Bot/1.0"
+}
+
+DEFAULT_DATA = {
+    "version": 1,
+    "updated_at": 0,
+    "ultima_actualizacion": "offline",
+
+    "dolar_tarjeta": 1846.0,
+    "dolar_oficial": 1320.0,
+    "dolar_mep": 1450.0,
+
+    "fuente_dolar": "fallback"
+}
+
+# ==========================================
+# HELPERS
+# ==========================================
+
+def log(msg):
+    ahora = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+    print(f"[{ahora}] {msg}")
+
+
+def validar_cotizacion(valor):
+    return 500 <= valor <= 5000
+
+
+def cargar_cache():
+
+    if os.path.exists(OUTPUT_FILE):
+
+        try:
+
+            with open(OUTPUT_FILE, "r", encoding="utf-8") as f:
+                return json.load(f)
+
+        except Exception as e:
+            log(f"[CACHE ERROR] {e}")
+
+    return DEFAULT_DATA.copy()
+
+
+# ==========================================
+# APIs DÓLAR
+# ==========================================
 
 def obtener_dolar():
-    try:
-        respuesta = requests.get(URL_DOLAR)
-        datos = respuesta.json()
-        return datos["venta"], datos["fechaActualizacion"]
-    except:
-        return 1846.0, "Error al actualizar" # Valor de respaldo si la API se cae
 
-def obtener_tasa_correo():
+    for url in FUENTES_DOLAR:
+
+        try:
+
+            log(f"Consultando API: {url}")
+
+            respuesta = requests.get(
+                url,
+                headers=HEADERS,
+                timeout=10
+            )
+
+            respuesta.raise_for_status()
+
+            content_type = respuesta.headers.get(
+                "Content-Type",
+                ""
+            )
+
+            if "application/json" not in content_type:
+                raise ValueError("La API no devolvió JSON")
+
+            data = respuesta.json()
+
+            # ======================================
+            # DOLARAPI
+            # ======================================
+
+            if "venta" in data:
+
+                dolar = float(data["venta"])
+
+                if not validar_cotizacion(dolar):
+                    raise ValueError("Cotización inválida")
+
+                return {
+                    "dolar_tarjeta": dolar,
+                    "fuente_dolar": "dolarapi"
+                }
+
+            # ======================================
+            # BLUELYTICS
+            # ======================================
+
+            elif "oficial" in data:
+
+                oficial = float(
+                    data["oficial"]["value_sell"]
+                )
+
+                blue = float(
+                    data["blue"]["value_sell"]
+                )
+
+                if not validar_cotizacion(oficial):
+                    raise ValueError("Cotización inválida")
+
+                return {
+                    "dolar_tarjeta": oficial,
+                    "dolar_oficial": oficial,
+                    "dolar_mep": blue,
+                    "fuente_dolar": "bluelytics"
+                }
+
+        except Exception as e:
+
+            log(f"[ERROR] {url} -> {e}")
+
+    return None
+
+
+# ==========================================
+# GUARDADO SEGURO
+# ==========================================
+
+def guardar_json_seguro(data):
+
     try:
-        # El bot entra a la web del correo a mirar el precio
-        headers = {'User-Agent': 'Mozilla/5.0'}
-        respuesta = requests.get(URL_CORREO, headers=headers, timeout=10)
-        
-        # Si la web del correo responde bien, buscamos la tarifa
-        if respuesta.status_code == 200:
-            soup = BeautifulSoup(respuesta.text, 'html.parser')
-            # El bot busca el texto del trámite aduanero. 
-            # Si no lo encuentra, usa el valor base por defecto.
-            for texto in soup.get_text().split("\n"):
-                if "tasa de gestión" in texto.lower() or "presentación a aduana" in texto.lower():
-                    # Acá el bot extraería el número. 
-                    pass
-        return 12000.00 # Dejamos este valor base automatizado por ahora
-    except:
-        return 12000.00
+
+        # backup del archivo anterior
+        if os.path.exists(OUTPUT_FILE):
+
+            try:
+                os.replace(
+                    OUTPUT_FILE,
+                    BACKUP_FILE
+                )
+
+            except Exception as e:
+                log(f"[BACKUP ERROR] {e}")
+
+        # escritura temporal
+        with open(
+            TEMP_FILE,
+            "w",
+            encoding="utf-8"
+        ) as f:
+
+            json.dump(
+                data,
+                f,
+                indent=4,
+                ensure_ascii=False
+            )
+
+        # reemplazo atómico
+        os.replace(
+            TEMP_FILE,
+            OUTPUT_FILE
+        )
+
+        log("💾 JSON guardado correctamente")
+
+    except Exception as e:
+
+        log(f"[SAVE ERROR] {e}")
+
+
+# ==========================================
+# MAIN
+# ==========================================
 
 def ejecutar_bot():
-    print("🤖 Bot ImportoK iniciando escaneo automático...")
-    
-    # 1. Recolecta el dólar al día
-    precio_dolar, fecha = obtener_dolar()
-    
-    # 2. Recolecta la tasa del correo en vivo
-    tasa_correo = obtener_tasa_correo()
-    
-    # 3. Estructura el JSON para la App
-    datos_app = {
-        "dolar_tarjeta": precio_dolar,
-        "limite_franquicia_usd": 50.00, # Ley ARCA vigente
-        "porcentaje_arancel": 0.50,     # 50% sobre el excedente
-        "tasa_correo_ars": tasa_correo,
-        "ultima_actualizacion": fecha
-    }
-    
-    # 4. Guarda el archivo listo para que lo consuma Flutter
-    with open("datos.json", "w") as archivo:
-        json.dump(datos_app, archivo, indent=4)
-        
-    print(f"¡Éxito! Datos sincronizados automáticamente.")
-    print(f"Dólar: ${precio_dolar} | Correo: ${tasa_correo}")
+
+    log("🤖 Iniciando actualización ImportoK")
+
+    cache = cargar_cache()
+
+    datos_dolar = obtener_dolar()
+
+    # ======================================
+    # SI LA API RESPONDE BIEN
+    # ======================================
+
+    if datos_dolar:
+
+        cache.update(datos_dolar)
+
+        cache["updated_at"] = int(time.time())
+
+        cache["ultima_actualizacion"] = (
+            datetime.now().isoformat()
+        )
+
+        cache["version"] = 1
+
+        log("✅ Cotización actualizada")
+
+    # ======================================
+    # SI FALLAN TODAS LAS APIs
+    # ======================================
+
+    else:
+
+        log(
+            "⚠️ Todas las APIs fallaron. "
+            "Se mantiene cache anterior."
+        )
+
+    guardar_json_seguro(cache)
+
+    log("🏁 Finalizó ejecución")
+
+
+# ==========================================
+# ENTRYPOINT
+# ==========================================
 
 if __name__ == "__main__":
     ejecutar_bot()
