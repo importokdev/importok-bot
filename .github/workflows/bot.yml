@@ -2,15 +2,19 @@ name: Ejecutar Bot ImportoK
 
 on:
   schedule:
-    # Corre a las 14:00 UTC (11:00 AM Argentina) y 19:00 UTC (4:00 PM Argentina) de lunes a viernes
+    
     - cron: '0 14,19 * * 1-5'
-  workflow_dispatch: # Esto nos permite probar el bot manualmente desde la web cuando queramos
+  workflow_dispatch: 
 
 jobs:
   actualizar-datos:
     runs-on: ubuntu-latest
     permissions:
-      contents: write # Le da permiso a GitHub para guardar el archivo modificado
+      contents: write 
+    
+  
+    env:
+      FORCE_JAVASCRIPT_ACTIONS_TO_NODE24: 'true'
 
     steps:
     - name: Descargar codigo del repositorio
